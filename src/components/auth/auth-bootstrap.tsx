@@ -1,10 +1,6 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { toast } from "sonner";
-
-import { generateIdentityKeyPair } from "@/lib/crypto/e2ee";
-import { loadStoredIdentity, saveStoredIdentity } from "@/lib/crypto/identity-store";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { Database } from "@/types/supabase";
 
@@ -24,7 +20,6 @@ export function AuthBootstrap() {
 
       if (!user) return;
 
-      const storedIdentity = loadStoredIdentity(user.id);
       const { data: existingProfiles } = await supabase
         .from("users")
         .select("*")
@@ -32,17 +27,10 @@ export function AuthBootstrap() {
         .returns<Database["public"]["Tables"]["users"]["Row"][]>();
       const existingProfile = existingProfiles?.[0] ?? null;
 
-      if (storedIdentity && existingProfile?.public_key) {
+      if (existingProfile?.public_key) {
         bootstrappedRef.current = true;
         return;
       }
-
-      const identity = storedIdentity ?? (await generateIdentityKeyPair());
-      saveStoredIdentity({
-        userId: user.id,
-        publicKey: identity.publicKey,
-        privateKey: identity.privateKey,
-      });
 
       const name =
         (typeof user.user_metadata?.name === "string" && user.user_metadata.name) ||
@@ -60,23 +48,16 @@ export function AuthBootstrap() {
             .slice(0, 2)
             .map((part) => part[0]?.toUpperCase() ?? "")
             .join(""),
-          public_key: identity.publicKey,
+          public_key: existingProfile?.public_key ?? `plain:${user.id}`,
+          encrypted_private_key: null,
         } satisfies Database["public"]["Tables"]["users"]["Insert"],
       ];
 
       const { error } = await supabase.from("users").upsert(payload as never);
 
-      if (error) {
-        toast.error("Nao foi possivel concluir o bootstrap E2EE.", {
-          description: error.message,
-        });
-        return;
-      }
+      if (error) return;
 
       bootstrappedRef.current = true;
-      toast.success("Identidade criptografica pronta.", {
-        description: "Sua chave publica foi publicada e a chave privada ficou armazenada localmente neste dispositivo.",
-      });
     };
 
     void run();

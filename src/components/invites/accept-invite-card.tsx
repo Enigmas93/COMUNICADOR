@@ -4,23 +4,14 @@ import type { Route } from "next";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, KeyRound, LoaderCircle, ShieldCheck } from "lucide-react";
+import { CheckCircle2, Link2, LoaderCircle, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { decryptInviteRoomKey, sealRoomKeyForMember } from "@/lib/crypto/e2ee";
-import { loadStoredIdentity } from "@/lib/crypto/identity-store";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { RoomInvite } from "@/types/domain";
 import type { Database } from "@/types/supabase";
-
-const inviteSecretStoragePrefix = "aurora:invite-secret:";
-
-function parseInviteSecret(hash: string) {
-  const params = new URLSearchParams(hash.replace(/^#/, ""));
-  return params.get("k");
-}
 
 export function AcceptInviteCard({
   token,
@@ -44,18 +35,6 @@ export function AcceptInviteCard({
 }) {
   const router = useRouter();
   const supabase = createSupabaseBrowserClient();
-  const [inviteSecret] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-
-    const key = `${inviteSecretStoragePrefix}${token}`;
-    const fromHash = parseInviteSecret(window.location.hash);
-    if (fromHash) {
-      window.localStorage.setItem(key, fromHash);
-      return fromHash;
-    }
-
-    return window.localStorage.getItem(key);
-  });
   const [submitting, setSubmitting] = useState(false);
   const [openedAt] = useState(() => Date.now());
 
@@ -68,10 +47,6 @@ export function AcceptInviteCard({
   const acceptInvite = async () => {
     if (!supabase) {
       toast.error("Configure o Supabase antes de aceitar o convite.");
-      return;
-    }
-    if (!invite.keyWrapCiphertext || !invite.keyWrapIv || !inviteSecret) {
-      toast.error("Este link de convite esta incompleto ou perdeu o segredo criptografico.");
       return;
     }
 
@@ -87,45 +62,13 @@ export function AcceptInviteCard({
         return;
       }
 
-      const identity = loadStoredIdentity(user.id);
-      if (!identity) {
-        toast.error("Sua identidade criptografica ainda nao foi preparada. Tente recarregar a pagina.");
-        return;
-      }
-
       if (isMember) {
         router.replace(`/rooms/${room.slug}` as Route);
         return;
       }
 
-      const { data: profiles, error: profileError } = await supabase
-        .from("users")
-        .select("*")
-        .eq("id", user.id)
-        .returns<Database["public"]["Tables"]["users"]["Row"][]>();
-
-      if (profileError) {
-        toast.error(profileError.message);
-        return;
-      }
-
-      const profile = profiles?.[0];
-      if (!profile?.public_key) {
-        toast.error("Sua chave publica ainda nao esta disponivel no perfil.");
-        return;
-      }
-
-      const roomKey = await decryptInviteRoomKey(
-        {
-          ciphertext: invite.keyWrapCiphertext,
-          nonce: invite.keyWrapIv,
-        },
-        inviteSecret,
-      );
-      const encryptedRoomKey = await sealRoomKeyForMember(roomKey, profile.public_key);
-
       if (!room.currentRoomKeyId) {
-        toast.error("A sala ainda nao possui uma versao de chave ativa.");
+        toast.error("A conversa ainda nao esta pronta.");
         return;
       }
 
@@ -134,7 +77,7 @@ export function AcceptInviteCard({
           room_id: room.id,
           user_id: user.id,
           role: "member",
-          encrypted_room_key: encryptedRoomKey,
+          encrypted_room_key: "plain-mode",
           current_room_key_id: room.currentRoomKeyId,
         } satisfies Database["public"]["Tables"]["room_members"]["Insert"],
       ];
@@ -155,7 +98,7 @@ export function AcceptInviteCard({
           room_key_id: room.currentRoomKeyId,
           room_id: room.id,
           user_id: user.id,
-          encrypted_room_key: encryptedRoomKey,
+          encrypted_room_key: "plain-mode",
         } satisfies Database["public"]["Tables"]["room_member_keys"]["Insert"],
       ];
       const { error: memberKeyError } = await supabase.from("room_member_keys").upsert(memberKeyPayload as never, {
@@ -177,7 +120,6 @@ export function AcceptInviteCard({
         return;
       }
 
-      window.localStorage.removeItem(`${inviteSecretStoragePrefix}${token}`);
       toast.success("Convite aceito com sucesso.");
       router.replace(`/rooms/${room.slug}` as Route);
       router.refresh();
@@ -193,18 +135,17 @@ export function AcceptInviteCard({
       <CardHeader>
         <div className="flex items-center gap-2 text-cyan-300">
           <ShieldCheck className="size-4" />
-          <p className="text-sm uppercase tracking-[0.18em]">Convite E2EE</p>
+          <p className="text-sm uppercase tracking-[0.18em]">Convite de conversa</p>
         </div>
         <h1 className="text-3xl font-semibold text-white">Voce foi convidado para {room.name}</h1>
         <p className="max-w-2xl text-sm leading-6 text-zinc-400">
-          O link contem um segredo temporario para abrir a chave da sala no cliente. O servidor continua sem acesso ao
-          conteudo em texto puro.
+          Entre com sua conta para aceitar e adicionar essa pessoa aos seus contatos conhecidos.
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="rounded-[24px] border border-white/10 bg-white/5 p-4 text-sm text-zinc-300">
           <p className="font-medium text-white">{room.name}</p>
-          <p className="mt-1 text-zinc-400">{room.description || "Sala privada para colaboracao segura."}</p>
+          <p className="mt-1 text-zinc-400">{room.description || "Conversa privada para contato conhecido."}</p>
           <p className="mt-3 text-xs text-zinc-500">
             Token: {token} | Expira em: {new Date(invite.expiresAt).toLocaleString("pt-BR")}
           </p>
@@ -225,33 +166,27 @@ export function AcceptInviteCard({
         {inviteState !== "active" ? (
           <div className="rounded-[24px] border border-rose-400/20 bg-rose-400/10 p-4 text-sm text-rose-100">
             {inviteState === "expired"
-              ? "Este convite expirou. Gere um novo link nas configuracoes da sala."
+              ? "Este convite expirou. Gere um novo link no painel principal."
               : "Este convite atingiu o limite de usos e nao pode mais ser aceito."}
-          </div>
-        ) : null}
-
-        {!inviteSecret ? (
-          <div className="rounded-[24px] border border-amber-400/20 bg-amber-400/10 p-4 text-sm text-amber-50">
-            O segredo criptografico do convite nao foi encontrado. Abra novamente o link original completo.
           </div>
         ) : null}
 
         <div className="flex flex-wrap items-center gap-3">
           {authenticated ? (
-            <Button onClick={() => void acceptInvite()} disabled={submitting || inviteState !== "active" || !inviteSecret || isMember}>
-              {submitting ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : <KeyRound className="mr-2 size-4" />}
+            <Button onClick={() => void acceptInvite()} disabled={submitting || inviteState !== "active" || isMember}>
+              {submitting ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : <Link2 className="mr-2 size-4" />}
               Aceitar convite
             </Button>
           ) : (
             <Button asChild>
               <Link href={`/login?next=${encodeURIComponent(`/invite/${token}`)}` as Route}>
-                <KeyRound className="mr-2 size-4" />
+                <Link2 className="mr-2 size-4" />
                 Entrar para aceitar
               </Link>
             </Button>
           )}
           <p className="text-sm text-zinc-500">
-            O segredo fica salvo apenas neste navegador para concluir o aceite apos o login.
+            Depois do aceite, essa conversa passa a aparecer na sua lista principal.
           </p>
         </div>
       </CardContent>

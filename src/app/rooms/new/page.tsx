@@ -1,5 +1,5 @@
-import { CreateRoomForm } from "@/components/dashboard/create-room-form";
+import { NewConversationForm } from "@/components/dashboard/new-conversation-form";
 
 export default function NewRoomPage() {
-  return <CreateRoomForm />;
+  return <NewConversationForm />;
 }

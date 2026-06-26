@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { AuthBootstrap } from "@/components/auth/auth-bootstrap";
+import { PresenceHeartbeat } from "@/components/auth/presence-heartbeat";
 import { Providers } from "@/components/providers";
 import { ServiceWorkerRegister } from "@/components/sw-register";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -16,7 +17,7 @@ const grotesk = Space_Grotesk({ subsets: ["latin"], variable: "--font-heading" }
 
 export const metadata: Metadata = {
   title: "Aurora Chat",
-  description: "App de comunicacao em tempo real com salas publicas, privadas e E2EE real.",
+  description: "App de comunicacao em tempo real com conversas privadas, anexos e contatos conhecidos.",
 };
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
@@ -27,6 +28,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
       <body className={`${inter.variable} ${grotesk.variable} bg-background font-sans text-foreground antialiased`}>
         <Providers>
           <AuthBootstrap />
+          <PresenceHeartbeat />
           <ServiceWorkerRegister />
           <div className="mx-auto min-h-screen max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
             <header className="mb-6 flex items-center justify-between rounded-full border border-white/10 bg-black/20 px-4 py-3 backdrop-blur xl:px-6">
@@ -41,7 +43,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                   <Link href="/dashboard">Dashboard</Link>
                 </Button>
                 <Button asChild variant="ghost" size="sm">
-                  <Link href="/rooms/new">Nova sala</Link>
+                  <Link href="/rooms/new">Nova conversa</Link>
                 </Button>
                 {session ? (
                   <form action="/auth/signout" method="post">

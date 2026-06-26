@@ -8,6 +8,8 @@ export interface UserProfile {
   email: string;
   avatarUrl: string;
   publicKey?: string;
+  lastSeenAt?: string;
+  isOnline?: boolean;
 }
 
 export interface RoomChannel {
@@ -92,4 +94,16 @@ export interface Room {
   currentRoomKeyId?: string | null;
   currentRoomKeyVersion?: number | null;
   keyAccesses?: RoomKeyAccess[];
+}
+
+export interface DashboardContact {
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl: string;
+  publicKey?: string;
+  sharedRooms: number;
+  directRoomSlug?: string;
+  lastSeenAt?: string;
+  isOnline?: boolean;
 }

@@ -1,6 +1,6 @@
 import { mockRooms, publicDirectory, signedInUser } from "@/lib/data/mock";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import type { ChatMessage, MessageReaction, Room, RoomChannel, RoomInvite, RoomKeyAccess, RoomMember, UserProfile } from "@/types/domain";
+import type { ChatMessage, DashboardContact, MessageReaction, Room, RoomChannel, RoomInvite, RoomKeyAccess, RoomMember, UserProfile } from "@/types/domain";
 import type { Database } from "@/types/supabase";
 
 type UserRow = Database["public"]["Tables"]["users"]["Row"];
@@ -13,6 +13,11 @@ type MessageRow = Database["public"]["Tables"]["messages"]["Row"];
 type FileRow = Database["public"]["Tables"]["files"]["Row"];
 type ReactionRow = Database["public"]["Tables"]["reactions"]["Row"];
 type InviteRow = Database["public"]["Tables"]["room_invites"]["Row"];
+
+function isUserOnline(lastSeenAt?: string | null) {
+  if (!lastSeenAt) return false;
+  return Date.now() - new Date(lastSeenAt).getTime() <= 1000 * 60 * 2;
+}
 
 function avatarFromName(name: string) {
   return name
@@ -29,6 +34,8 @@ function toUserProfile(user: UserRow): UserProfile {
     email: user.email,
     avatarUrl: user.avatar_url ?? avatarFromName(user.name),
     publicKey: user.public_key,
+    lastSeenAt: user.last_seen_at,
+    isOnline: isUserOnline(user.last_seen_at),
   };
 }
 
@@ -38,6 +45,7 @@ function fallbackProfile(id: string, label = "Usuario"): UserProfile {
     name: label,
     email: "",
     avatarUrl: avatarFromName(label),
+    isOnline: false,
   };
 }
 
@@ -66,7 +74,7 @@ function toMessage(
     roomKeyId: message.room_key_id,
     author,
     type: message.type,
-    body: "",
+    body: message.ciphertext,
     ciphertext: message.ciphertext,
     iv: message.iv,
     createdAt: message.created_at,
@@ -112,6 +120,17 @@ export async function getDashboardData() {
       currentUser: signedInUser,
       rooms: mockRooms,
       publicRooms: publicDirectory,
+      contacts: mockRooms[0]?.members
+        .filter((member) => member.user.id !== signedInUser.id)
+        .map((member) => ({
+          id: member.user.id,
+          name: member.user.name,
+          email: member.user.email,
+          avatarUrl: member.user.avatarUrl,
+          sharedRooms: 1,
+          isOnline: member.user.isOnline ?? false,
+          lastSeenAt: member.user.lastSeenAt,
+        })) satisfies DashboardContact[],
       configured: false,
       authenticated: false,
     };
@@ -126,6 +145,7 @@ export async function getDashboardData() {
       currentUser: null,
       rooms: [],
       publicRooms: publicDirectory,
+      contacts: [] as DashboardContact[],
       configured: true,
       authenticated: false,
     };
@@ -138,14 +158,33 @@ export async function getDashboardData() {
   ]);
 
   const roomIds = memberships?.map((membership) => membership.room_id) ?? [];
-  const [{ data: roomRows }, { data: channelsRows }] = await Promise.all([
+  const [{ data: roomRows }, { data: channelsRows }, { data: memberRows }, { data: latestMessageRows }] = await Promise.all([
     roomIds.length > 0
       ? supabase.from("rooms").select("*").in("id", roomIds).returns<RoomRow[]>()
       : Promise.resolve({ data: [] as RoomRow[] }),
     roomIds.length > 0
       ? supabase.from("room_channels").select("*").in("room_id", roomIds).order("position", { ascending: true }).returns<ChannelRow[]>()
       : Promise.resolve({ data: [] as ChannelRow[] }),
+    roomIds.length > 0
+      ? supabase.from("room_members").select("*").in("room_id", roomIds).returns<MemberRow[]>()
+      : Promise.resolve({ data: [] as MemberRow[] }),
+    roomIds.length > 0
+      ? supabase
+          .from("messages")
+          .select("*")
+          .in("room_id", roomIds)
+          .order("created_at", { ascending: false })
+          .returns<MessageRow[]>()
+      : Promise.resolve({ data: [] as MessageRow[] }),
   ]);
+
+  const knownUserIds = Array.from(
+    new Set((memberRows ?? []).map((member) => member.user_id)),
+  );
+  const { data: userRows } =
+    knownUserIds.length > 0
+      ? await supabase.from("users").select("*").in("id", knownUserIds).returns<UserRow[]>()
+      : { data: [] as UserRow[] };
 
   const currentUser = profile ? toUserProfile(profile) : null;
   const channelsByRoom = new Map<string, RoomChannel[]>();
@@ -154,16 +193,76 @@ export async function getDashboardData() {
     current.push(toChannel(channel));
     channelsByRoom.set(channel.room_id, current);
   }
+  const latestMessageByRoom = new Map<string, MessageRow>();
+  for (const message of latestMessageRows ?? []) {
+    if (!latestMessageByRoom.has(message.room_id)) {
+      latestMessageByRoom.set(message.room_id, message);
+    }
+  }
+  const userMap = new Map((userRows ?? []).map((entry) => [entry.id, toUserProfile(entry)]));
+  const membersByRoom = new Map<string, RoomMember[]>();
+  for (const member of memberRows ?? []) {
+    const current = membersByRoom.get(member.room_id) ?? [];
+    current.push({
+      id: `${member.room_id}:${member.user_id}`,
+      user: userMap.get(member.user_id) ?? fallbackProfile(member.user_id, "Contato"),
+      role: member.role,
+      joinedAt: member.joined_at,
+      encryptedRoomKey: member.encrypted_room_key,
+      currentRoomKeyId: member.current_room_key_id,
+    });
+    membersByRoom.set(member.room_id, current);
+  }
 
   const rooms: Room[] = (roomRows ?? []).map((room) => ({
     ...toRoomSummary(room),
     channels: channelsByRoom.get(room.id) ?? [],
+    members: membersByRoom.get(room.id) ?? [],
+    messages: latestMessageByRoom.has(room.id)
+      ? [
+          toMessage(
+            latestMessageByRoom.get(room.id) as MessageRow,
+            userMap.get((latestMessageByRoom.get(room.id) as MessageRow).user_id) ??
+              fallbackProfile((latestMessageByRoom.get(room.id) as MessageRow).user_id),
+            undefined,
+            [],
+          ),
+        ]
+      : [],
   }));
+
+  const directRoomByUserId = new Map<string, string>();
+  for (const room of rooms) {
+    if (room.isPublic || room.members.length !== 2 || !currentUser) continue;
+    const peer = room.members.find((member) => member.user.id !== currentUser.id);
+    if (peer) directRoomByUserId.set(peer.user.id, room.slug);
+  }
+
+  const contactsById = new Map<string, DashboardContact>();
+  for (const room of rooms) {
+    for (const member of room.members) {
+      if (!currentUser || member.user.id === currentUser.id) continue;
+      const existing = contactsById.get(member.user.id);
+      contactsById.set(member.user.id, {
+        id: member.user.id,
+        name: member.user.name,
+        email: member.user.email,
+        avatarUrl: member.user.avatarUrl,
+        publicKey: member.user.publicKey,
+        sharedRooms: (existing?.sharedRooms ?? 0) + 1,
+        directRoomSlug: directRoomByUserId.get(member.user.id),
+        lastSeenAt: member.user.lastSeenAt,
+        isOnline: member.user.isOnline,
+      });
+    }
+  }
+  const contacts = Array.from(contactsById.values()).sort((a, b) => a.name.localeCompare(b.name));
 
   return {
     currentUser,
     rooms,
     publicRooms: publicRooms?.map(toRoomSummary) ?? [],
+    contacts,
     configured: true,
     authenticated: true,
   };

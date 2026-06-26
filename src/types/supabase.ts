@@ -36,6 +36,7 @@ export interface Database {
           avatar_url: string | null;
           public_key: string;
           encrypted_private_key: string | null;
+          last_seen_at: string;
           created_at: string;
         };
         Insert: {
@@ -45,6 +46,7 @@ export interface Database {
           avatar_url?: string | null;
           public_key: string;
           encrypted_private_key?: string | null;
+          last_seen_at?: string;
           created_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["users"]["Insert"]>;
