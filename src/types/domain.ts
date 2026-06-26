@@ -28,6 +28,11 @@ export interface MessageReaction {
   reactedByCurrentUser: boolean;
 }
 
+export interface MessageReadReceipt {
+  userId: string;
+  readAt: string;
+}
+
 export interface RoomMember {
   id: string;
   user: UserProfile;
@@ -64,6 +69,7 @@ export interface ChatMessage {
     encrypted?: boolean;
   };
   reactions?: MessageReaction[];
+  readReceipts?: MessageReadReceipt[];
 }
 
 export interface RoomInvite {

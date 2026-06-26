@@ -1,6 +1,6 @@
 import { mockRooms, publicDirectory, signedInUser } from "@/lib/data/mock";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import type { ChatMessage, DashboardContact, MessageReaction, Room, RoomChannel, RoomInvite, RoomKeyAccess, RoomMember, UserProfile } from "@/types/domain";
+import type { ChatMessage, DashboardContact, MessageReadReceipt, MessageReaction, Room, RoomChannel, RoomInvite, RoomKeyAccess, RoomMember, UserProfile } from "@/types/domain";
 import type { Database } from "@/types/supabase";
 
 type UserRow = Database["public"]["Tables"]["users"]["Row"];
@@ -12,6 +12,7 @@ type ChannelRow = Database["public"]["Tables"]["room_channels"]["Row"];
 type MessageRow = Database["public"]["Tables"]["messages"]["Row"];
 type FileRow = Database["public"]["Tables"]["files"]["Row"];
 type ReactionRow = Database["public"]["Tables"]["reactions"]["Row"];
+type MessageReadRow = Database["public"]["Tables"]["message_reads"]["Row"];
 type InviteRow = Database["public"]["Tables"]["room_invites"]["Row"];
 
 function isUserOnline(lastSeenAt?: string | null) {
@@ -66,6 +67,7 @@ function toMessage(
   author: UserProfile,
   attachment: ChatMessage["attachment"],
   reactions: MessageReaction[],
+  readReceipts: MessageReadReceipt[],
 ): ChatMessage {
   return {
     id: message.id,
@@ -80,6 +82,7 @@ function toMessage(
     createdAt: message.created_at,
     attachment,
     reactions,
+    readReceipts,
   };
 }
 
@@ -226,6 +229,7 @@ export async function getDashboardData() {
               fallbackProfile((latestMessageByRoom.get(room.id) as MessageRow).user_id),
             undefined,
             [],
+            [],
           ),
         ]
       : [],
@@ -298,13 +302,16 @@ export async function getRoomBySlug(slug: string) {
   ]);
 
   const messageIds = messageRows?.map((message) => message.id) ?? [];
-  const [{ data: fileRows }, { data: reactionRows }] = await Promise.all([
+  const [{ data: fileRows }, { data: reactionRows }, { data: readRows }] = await Promise.all([
     messageIds.length > 0
       ? supabase.from("files").select("*").in("message_id", messageIds).returns<FileRow[]>()
       : Promise.resolve({ data: [] as FileRow[] }),
     messageIds.length > 0
       ? supabase.from("reactions").select("*").in("message_id", messageIds).returns<ReactionRow[]>()
       : Promise.resolve({ data: [] as ReactionRow[] }),
+    messageIds.length > 0
+      ? supabase.from("message_reads").select("*").in("message_id", messageIds).returns<MessageReadRow[]>()
+      : Promise.resolve({ data: [] as MessageReadRow[] }),
   ]);
 
   const userIds = Array.from(new Set([...(memberRows?.map((member) => member.user_id) ?? []), ...(messageRows?.map((message) => message.user_id) ?? [])]));
@@ -350,6 +357,12 @@ export async function getRoomBySlug(slug: string) {
     current.push(reaction);
     reactionsByMessageId.set(reaction.message_id, current);
   }
+  const readsByMessageId = new Map<string, MessageReadRow[]>();
+  for (const readEntry of readRows ?? []) {
+    const current = readsByMessageId.get(readEntry.message_id) ?? [];
+    current.push(readEntry);
+    readsByMessageId.set(readEntry.message_id, current);
+  }
 
   const messages = (messageRows ?? []).map((message) => {
     const grouped = reactionsByMessageId.get(message.id) ?? [];
@@ -371,6 +384,13 @@ export async function getRoomBySlug(slug: string) {
             count: entries.length,
             reactedByCurrentUser: entries.some((entry) => entry.user_id === user?.id),
           }) satisfies MessageReaction,
+      ),
+      (readsByMessageId.get(message.id) ?? []).map(
+        (entry) =>
+          ({
+            userId: entry.user_id,
+            readAt: entry.read_at,
+          }) satisfies MessageReadReceipt,
       ),
     );
   });

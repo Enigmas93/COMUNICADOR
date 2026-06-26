@@ -194,6 +194,19 @@ export interface Database {
         };
         Update: Partial<Database["public"]["Tables"]["reactions"]["Insert"]>;
       };
+      message_reads: {
+        Row: {
+          message_id: string;
+          user_id: string;
+          read_at: string;
+        };
+        Insert: {
+          message_id: string;
+          user_id: string;
+          read_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["message_reads"]["Insert"]>;
+      };
       room_invites: {
         Row: {
           id: string;

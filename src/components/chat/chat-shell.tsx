@@ -4,7 +4,23 @@ import { AnimatePresence, motion } from "framer-motion";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import type { Route } from "next";
 import Link from "next/link";
-import { Download, LockKeyhole, Mic, Paperclip, Send, SmilePlus, Square, Users, X } from "lucide-react";
+import {
+  Check,
+  CheckCheck,
+  Download,
+  FileAudio,
+  FileImage,
+  FileText,
+  FileUp,
+  LockKeyhole,
+  Mic,
+  Paperclip,
+  Send,
+  SmilePlus,
+  Square,
+  Users,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -30,6 +46,21 @@ function avatarFromName(name: string) {
     .slice(0, 2);
 }
 
+function getAttachmentKind(mimeType: string) {
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("audio/")) return "audio";
+  if (mimeType.includes("pdf")) return "pdf";
+  return "file";
+}
+
+function getAttachmentLabel(mimeType: string) {
+  const kind = getAttachmentKind(mimeType);
+  if (kind === "image") return "Foto";
+  if (kind === "audio") return "Audio";
+  if (kind === "pdf") return "PDF";
+  return "Arquivo";
+}
+
 export function ChatShell({ room }: { room: Room }) {
   const router = useRouter();
   const [draft, setDraft] = useState("");
@@ -41,6 +72,7 @@ export function ChatShell({ room }: { room: Room }) {
   const [submitting, setSubmitting] = useState(false);
   const [downloadingMessageId, setDownloadingMessageId] = useState<string | null>(null);
   const [imagePreviewUrls, setImagePreviewUrls] = useState<Record<string, string>>({});
+  const [audioPreviewUrls, setAudioPreviewUrls] = useState<Record<string, string>>({});
   const [expandedImage, setExpandedImage] = useState<{ src: string; name: string } | null>(null);
   const [typingUsers, setTypingUsers] = useState<Record<string, string>>({});
   const [recording, setRecording] = useState(false);
@@ -72,6 +104,10 @@ export function ChatShell({ room }: { room: Room }) {
     .map((member) => member.user.name)
     .join(", ");
   const currentMember = room.members.find((member) => member.user.id === room.currentUserId) ?? null;
+  const peerUserIds = useMemo(
+    () => room.members.filter((member) => member.user.id !== room.currentUserId).map((member) => member.user.id),
+    [room.currentUserId, room.members],
+  );
   const typingLabel = useMemo(() => {
     const names = Object.entries(typingUsers)
       .filter(([userId]) => userId !== room.currentUserId)
@@ -85,30 +121,48 @@ export function ChatShell({ room }: { room: Room }) {
     if (!supabase) return;
 
     let active = true;
-    const createdUrls: string[] = [];
+    const createdImageUrls: string[] = [];
+    const createdAudioUrls: string[] = [];
 
     const loadPreviews = async () => {
       const entries = await Promise.all(
         visibleMessages.map(async (message) => {
-          if (!message.attachment?.storagePath || !message.attachment.mimeType.startsWith("image/")) return null;
+          if (!message.attachment?.storagePath) return null;
+          const kind = getAttachmentKind(message.attachment.mimeType);
+          if (kind !== "image" && kind !== "audio") return null;
 
           const { data, error } = await supabase.storage.from("room-files").download(message.attachment.storagePath);
           if (error || !data) return null;
 
           const url = URL.createObjectURL(data);
-          createdUrls.push(url);
-          return [message.id, url] as const;
+          if (kind === "image") {
+            createdImageUrls.push(url);
+          } else {
+            createdAudioUrls.push(url);
+          }
+          return [message.id, url, kind] as const;
         }),
       );
 
       if (!active) {
-        createdUrls.forEach((url) => URL.revokeObjectURL(url));
+        createdImageUrls.forEach((url) => URL.revokeObjectURL(url));
+        createdAudioUrls.forEach((url) => URL.revokeObjectURL(url));
         return;
       }
 
       setImagePreviewUrls((current) => {
         Object.values(current).forEach((url) => URL.revokeObjectURL(url));
-        return Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => Boolean(entry)));
+        const imageEntries = entries.flatMap((entry) => (entry && entry[2] === "image" ? [[entry[0], entry[1]] as const] : []));
+        return Object.fromEntries(
+          imageEntries,
+        );
+      });
+      setAudioPreviewUrls((current) => {
+        Object.values(current).forEach((url) => URL.revokeObjectURL(url));
+        const audioEntries = entries.flatMap((entry) => (entry && entry[2] === "audio" ? [[entry[0], entry[1]] as const] : []));
+        return Object.fromEntries(
+          audioEntries,
+        );
       });
     };
 
@@ -116,7 +170,8 @@ export function ChatShell({ room }: { room: Room }) {
 
     return () => {
       active = false;
-      createdUrls.forEach((url) => URL.revokeObjectURL(url));
+      createdImageUrls.forEach((url) => URL.revokeObjectURL(url));
+      createdAudioUrls.forEach((url) => URL.revokeObjectURL(url));
     };
   }, [supabase, visibleMessages]);
 
@@ -204,9 +259,38 @@ export function ChatShell({ room }: { room: Room }) {
                 iv: row.iv,
                 createdAt: row.created_at,
                 reactions: [],
+                readReceipts: [],
               },
             ];
           });
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "message_reads",
+        },
+        ({ new: payload }) => {
+          const row = payload as Database["public"]["Tables"]["message_reads"]["Row"];
+          setLiveMessages((current) =>
+            current.map((message) => {
+              if (message.id !== row.message_id) return message;
+              const existing = message.readReceipts ?? [];
+              if (existing.some((entry) => entry.userId === row.user_id)) return message;
+              return {
+                ...message,
+                readReceipts: [
+                  ...existing,
+                  {
+                    userId: row.user_id,
+                    readAt: row.read_at,
+                  },
+                ],
+              };
+            }),
+          );
         },
       )
       .on(
@@ -382,6 +466,23 @@ export function ChatShell({ room }: { room: Room }) {
       void supabase.removeChannel(channel);
     };
   }, [activeChannelId, room.currentUserId, room.id, router, supabase]);
+
+  useEffect(() => {
+    const currentUserId = room.currentUserId;
+    if (!supabase || !currentUserId || visibleMessages.length === 0) return;
+
+    const unreadIncoming = visibleMessages
+      .filter((message) => message.author.id !== currentUserId)
+      .filter((message) => !(message.readReceipts ?? []).some((entry) => entry.userId === currentUserId))
+      .map((message) => ({
+        message_id: message.id,
+        user_id: currentUserId,
+      } satisfies Database["public"]["Tables"]["message_reads"]["Insert"]));
+
+    if (unreadIncoming.length === 0) return;
+
+    void supabase.from("message_reads").insert(unreadIncoming as never);
+  }, [room.currentUserId, supabase, visibleMessages]);
 
   useEffect(() => {
     return () => {
@@ -658,6 +759,22 @@ export function ChatShell({ room }: { room: Room }) {
   };
 
   const peerMembers = room.members.filter((member) => member.user.id !== room.currentUserId);
+  const getMessageStatus = (message: ChatMessage) => {
+    const readByPeers = (message.readReceipts ?? []).filter((entry) => peerUserIds.includes(entry.userId));
+    if (readByPeers.length > 0) {
+      return {
+        label: "Lida",
+        icon: CheckCheck,
+        className: "text-cyan-200",
+      };
+    }
+
+    return {
+      label: "Enviada",
+      icon: Check,
+      className: "text-zinc-400",
+    };
+  };
 
   return (
     <div className="grid gap-6 xl:grid-cols-[260px_minmax(0,1fr)_320px]">
@@ -759,6 +876,15 @@ export function ChatShell({ room }: { room: Room }) {
                           {message.author.id === room.currentUserId ? "Voce" : message.author.name}
                         </p>
                         <span className="text-xs text-zinc-500">{formatRelativeDate(message.createdAt)}</span>
+                        {message.author.id === room.currentUserId ? (
+                          <span className={`inline-flex items-center gap-1 text-xs ${getMessageStatus(message).className}`}>
+                            {(() => {
+                              const StatusIcon = getMessageStatus(message).icon;
+                              return <StatusIcon className="size-3.5" />;
+                            })()}
+                            {getMessageStatus(message).label}
+                          </span>
+                        ) : null}
                       </div>
                       <p className="mt-2 text-sm leading-6 text-zinc-300">
                         {decryptedBodies[message.id] ?? (message.ciphertext ? "Decifrando..." : message.body)}
@@ -784,16 +910,45 @@ export function ChatShell({ room }: { room: Room }) {
                               />
                             </button>
                           ) : null}
+                          {message.attachment.mimeType.startsWith("audio/") && audioPreviewUrls[message.id] ? (
+                            <div className="rounded-2xl border border-white/10 bg-zinc-950/70 p-4">
+                              <div className="mb-3 flex items-center gap-3">
+                                <div className="flex size-10 items-center justify-center rounded-2xl bg-cyan-400/10 text-cyan-200">
+                                  <FileAudio className="size-5" />
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="truncate font-medium text-white">{message.attachment.name}</p>
+                                  <p className="text-xs text-zinc-500">{formatBytes(message.attachment.size)}</p>
+                                </div>
+                              </div>
+                              <audio controls preload="metadata" className="w-full" src={audioPreviewUrls[message.id]}>
+                                <track kind="captions" />
+                              </audio>
+                            </div>
+                          ) : null}
                           <button
                             type="button"
                             onClick={() => void downloadAttachment(message)}
                             className="flex w-full items-center justify-between rounded-2xl border border-white/10 bg-zinc-950/70 p-3 text-left text-sm text-zinc-300 transition hover:border-cyan-400/30"
                           >
-                            <div>
-                              <p className="font-medium text-white">{message.attachment.name}</p>
-                              <p className="mt-1 text-xs text-zinc-500">
-                                {message.attachment.mimeType} • {formatBytes(message.attachment.size)}
-                              </p>
+                            <div className="flex items-center gap-3">
+                              <div className="flex size-10 items-center justify-center rounded-2xl bg-white/5 text-zinc-200">
+                                {getAttachmentKind(message.attachment.mimeType) === "image" ? (
+                                  <FileImage className="size-5" />
+                                ) : getAttachmentKind(message.attachment.mimeType) === "audio" ? (
+                                  <FileAudio className="size-5" />
+                                ) : getAttachmentKind(message.attachment.mimeType) === "pdf" ? (
+                                  <FileText className="size-5" />
+                                ) : (
+                                  <FileUp className="size-5" />
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="truncate font-medium text-white">{message.attachment.name}</p>
+                                <p className="mt-1 text-xs text-zinc-500">
+                                  {getAttachmentLabel(message.attachment.mimeType)} • {formatBytes(message.attachment.size)}
+                                </p>
+                              </div>
                             </div>
                             <span className="inline-flex items-center gap-2 text-cyan-200">
                               <Download className="size-4" />
