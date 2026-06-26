@@ -1,11 +1,13 @@
 import { mockRooms, publicDirectory, signedInUser } from "@/lib/data/mock";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import type { ChatMessage, MessageReaction, Room, RoomChannel, RoomInvite, RoomMember, UserProfile } from "@/types/domain";
+import type { ChatMessage, MessageReaction, Room, RoomChannel, RoomInvite, RoomKeyAccess, RoomMember, UserProfile } from "@/types/domain";
 import type { Database } from "@/types/supabase";
 
 type UserRow = Database["public"]["Tables"]["users"]["Row"];
 type RoomRow = Database["public"]["Tables"]["rooms"]["Row"];
 type MemberRow = Database["public"]["Tables"]["room_members"]["Row"];
+type RoomKeyRow = Database["public"]["Tables"]["room_keys"]["Row"];
+type RoomMemberKeyRow = Database["public"]["Tables"]["room_member_keys"]["Row"];
 type ChannelRow = Database["public"]["Tables"]["room_channels"]["Row"];
 type MessageRow = Database["public"]["Tables"]["messages"]["Row"];
 type FileRow = Database["public"]["Tables"]["files"]["Row"];
@@ -61,6 +63,7 @@ function toMessage(
     id: message.id,
     roomId: message.room_id,
     channelId: message.channel_id ?? "",
+    roomKeyId: message.room_key_id,
     author,
     type: message.type,
     body: "",
@@ -98,6 +101,7 @@ function toRoomSummary(room: RoomRow): Room {
     messages: [],
     invites: [],
     unreadCount: 0,
+    currentRoomKeyId: room.current_room_key_id,
   };
 }
 
@@ -178,7 +182,7 @@ export async function getRoomBySlug(slug: string) {
   const { data: room } = await supabase.from("rooms").select("*").eq("slug", slug).maybeSingle<RoomRow>();
   if (!room) return null;
 
-  const [{ data: memberRows }, { data: channelRows }, { data: messageRows }, { data: inviteRows }] = await Promise.all([
+  const [{ data: memberRows }, { data: channelRows }, { data: messageRows }, { data: inviteRows }, { data: roomKeyRows }, { data: memberKeyRows }] = await Promise.all([
     supabase.from("room_members").select("*").eq("room_id", room.id).returns<MemberRow[]>(),
     supabase.from("room_channels").select("*").eq("room_id", room.id).order("position", { ascending: true }).returns<ChannelRow[]>(),
     supabase
@@ -188,6 +192,10 @@ export async function getRoomBySlug(slug: string) {
       .order("created_at", { ascending: true })
       .returns<MessageRow[]>(),
     supabase.from("room_invites").select("*").eq("room_id", room.id).returns<InviteRow[]>(),
+    supabase.from("room_keys").select("*").eq("room_id", room.id).order("version", { ascending: true }).returns<RoomKeyRow[]>(),
+    user
+      ? supabase.from("room_member_keys").select("*").eq("room_id", room.id).eq("user_id", user.id).returns<RoomMemberKeyRow[]>()
+      : Promise.resolve({ data: [] as RoomMemberKeyRow[] }),
   ]);
 
   const messageIds = messageRows?.map((message) => message.id) ?? [];
@@ -214,6 +222,12 @@ export async function getRoomBySlug(slug: string) {
     role: member.role,
     joinedAt: member.joined_at,
     encryptedRoomKey: member.encrypted_room_key,
+    currentRoomKeyId: member.current_room_key_id,
+  }));
+  const keyAccesses: RoomKeyAccess[] = (memberKeyRows ?? []).map((entry) => ({
+    roomKeyId: entry.room_key_id,
+    encryptedRoomKey: entry.encrypted_room_key,
+    createdAt: entry.created_at,
   }));
 
   const fileByMessageId = new Map(
@@ -263,6 +277,7 @@ export async function getRoomBySlug(slug: string) {
   });
 
   const currentMembership = members.find((member) => member.user.id === user?.id);
+  const currentRoomKey = (roomKeyRows ?? []).find((entry) => entry.id === room.current_room_key_id) ?? null;
 
   return {
     id: room.id,
@@ -278,6 +293,9 @@ export async function getRoomBySlug(slug: string) {
     unreadCount: 0,
     currentUserId: user?.id,
     currentUserRole: currentMembership?.role ?? null,
+    currentRoomKeyId: room.current_room_key_id,
+    currentRoomKeyVersion: currentRoomKey?.version ?? null,
+    keyAccesses,
   } satisfies Room;
 }
 
@@ -312,6 +330,7 @@ export async function getInviteByToken(token: string) {
       slug: room.slug,
       description: room.description ?? "",
       isPublic: room.is_public,
+      currentRoomKeyId: room.current_room_key_id,
     },
     authenticated: Boolean(user),
     isMember: (members ?? []).length > 0,

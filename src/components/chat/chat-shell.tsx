@@ -42,7 +42,8 @@ export function ChatShell({ room }: { room: Room }) {
   const router = useRouter();
   const [draft, setDraft] = useState("");
   const [activeChannelId, setActiveChannelId] = useState(room.channels[0]?.id ?? "");
-  const [roomKey, setRoomKey] = useState<string | null>(null);
+  const [roomKeys, setRoomKeys] = useState<Record<string, string>>({});
+  const [currentRoomKeyId, setCurrentRoomKeyId] = useState<string | null>(room.currentRoomKeyId ?? null);
   const [decryptedBodies, setDecryptedBodies] = useState<Record<string, string>>({});
   const [liveMessages, setLiveMessages] = useState(() => room.messages);
   const [liveChannels, setLiveChannels] = useState(() => room.channels);
@@ -59,6 +60,7 @@ export function ChatShell({ room }: { room: Room }) {
     () => liveChannels.find((channel) => channel.id === activeChannelId) ?? liveChannels[0] ?? null,
     [activeChannelId, liveChannels],
   );
+  const roomKey = currentRoomKeyId ? roomKeys[currentRoomKeyId] ?? null : null;
 
   useEffect(() => {
     if (!supabase) return;
@@ -73,17 +75,24 @@ export function ChatShell({ room }: { room: Room }) {
       if (!user) return;
 
       const identity = loadStoredIdentity(user.id);
-      const member = room.members.find((entry) => entry.user.id === user.id);
+      if (!identity) return;
 
-      if (!identity || !member?.encryptedRoomKey) return;
-
-      const decryptedRoomKey = await openRoomKeyEnvelope(
-        member.encryptedRoomKey,
-        identity.publicKey,
-        identity.privateKey,
+      const accessEntries = room.keyAccesses ?? [];
+      const decryptedEntries = await Promise.all(
+        accessEntries.map(async (entry) => ({
+          roomKeyId: entry.roomKeyId,
+          roomKey: await openRoomKeyEnvelope(entry.encryptedRoomKey, identity.publicKey, identity.privateKey),
+        })),
       );
 
-      if (active) setRoomKey(decryptedRoomKey);
+      if (active) {
+        setRoomKeys(
+          decryptedEntries.reduce<Record<string, string>>((accumulator, entry) => {
+            accumulator[entry.roomKeyId] = entry.roomKey;
+            return accumulator;
+          }, {}),
+        );
+      }
     };
 
     void bootstrapKeys();
@@ -91,10 +100,10 @@ export function ChatShell({ room }: { room: Room }) {
     return () => {
       active = false;
     };
-  }, [room.members, supabase]);
+  }, [room.keyAccesses, supabase]);
 
   useEffect(() => {
-    if (!roomKey) return;
+    if (Object.keys(roomKeys).length === 0) return;
 
     let active = true;
 
@@ -104,9 +113,14 @@ export function ChatShell({ room }: { room: Room }) {
       for (const message of liveMessages) {
         if (message.ciphertext && message.iv) {
           try {
+            const messageRoomKey = (message.roomKeyId ? roomKeys[message.roomKeyId] : null) ?? roomKey;
+            if (!messageRoomKey) {
+              nextBodies[message.id] = "[Chave indisponivel para esta mensagem]";
+              continue;
+            }
             nextBodies[message.id] = await decryptMessage(
               { ciphertext: message.ciphertext, nonce: message.iv },
-              roomKey,
+              messageRoomKey,
             );
           } catch {
             nextBodies[message.id] = "[Nao foi possivel decifrar a mensagem]";
@@ -124,13 +138,26 @@ export function ChatShell({ room }: { room: Room }) {
     return () => {
       active = false;
     };
-  }, [liveMessages, roomKey]);
+  }, [liveMessages, roomKey, roomKeys]);
 
   useEffect(() => {
     if (!supabase) return;
 
     const channel = supabase
       .channel(`room:${room.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "rooms",
+          filter: `id=eq.${room.id}`,
+        },
+        ({ new: payload }) => {
+          const row = payload as Database["public"]["Tables"]["rooms"]["Row"];
+          setCurrentRoomKeyId(row.current_room_key_id);
+        },
+      )
       .on(
         "postgres_changes",
         {
@@ -157,6 +184,7 @@ export function ChatShell({ room }: { room: Room }) {
                 id: row.id,
                 roomId: row.room_id,
                 channelId: row.channel_id ?? activeChannelId,
+                roomKeyId: row.room_key_id,
                 author: author
                   ? {
                       id: author.id,
@@ -179,6 +207,53 @@ export function ChatShell({ room }: { room: Room }) {
               },
             ];
           });
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "room_member_keys",
+          filter: `room_id=eq.${room.id}`,
+        },
+        async ({ new: payload }) => {
+          const row = payload as Database["public"]["Tables"]["room_member_keys"]["Row"];
+          if (row.user_id !== room.currentUserId) return;
+
+          const identity = room.currentUserId ? loadStoredIdentity(room.currentUserId) : null;
+          if (!identity) return;
+
+          try {
+            const decryptedRoomKey = await openRoomKeyEnvelope(
+              row.encrypted_room_key,
+              identity.publicKey,
+              identity.privateKey,
+            );
+            setRoomKeys((current) => ({
+              ...current,
+              [row.room_key_id]: decryptedRoomKey,
+            }));
+          } catch {
+            toast.error("Recebi uma nova chave da sala, mas nao consegui abri-la neste dispositivo.");
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "DELETE",
+          schema: "public",
+          table: "room_members",
+          filter: `room_id=eq.${room.id}`,
+        },
+        ({ old: payload }) => {
+          const row = payload as Database["public"]["Tables"]["room_members"]["Row"];
+          if (row.user_id !== room.currentUserId) return;
+
+          toast.error("Seu acesso a esta sala foi removido.");
+          router.replace("/dashboard" as Route);
+          router.refresh();
         },
       )
       .on(
@@ -320,7 +395,7 @@ export function ChatShell({ room }: { room: Room }) {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [activeChannelId, room.currentUserId, room.id, supabase]);
+  }, [activeChannelId, room.currentUserId, room.id, router, supabase]);
 
   const toggleReaction = async (message: ChatMessage, emoji: string) => {
     if (!supabase) return;
@@ -358,7 +433,8 @@ export function ChatShell({ room }: { room: Room }) {
   };
 
   const downloadAttachment = async (message: ChatMessage) => {
-    if (!supabase || !roomKey || !message.attachment?.storagePath || !message.attachment.iv) {
+    const messageRoomKey = (message.roomKeyId ? roomKeys[message.roomKeyId] : null) ?? roomKey;
+    if (!supabase || !messageRoomKey || !message.attachment?.storagePath || !message.attachment.iv) {
       toast.error("Anexo indisponivel para download.");
       return;
     }
@@ -372,7 +448,7 @@ export function ChatShell({ room }: { room: Room }) {
       }
 
       const encryptedBytes = await data.arrayBuffer();
-      const cleartext = await decryptBinaryBytes(encryptedBytes, message.attachment.iv, roomKey);
+      const cleartext = await decryptBinaryBytes(encryptedBytes, message.attachment.iv, messageRoomKey);
       const blob = new Blob([cleartext], {
         type: message.attachment.mimeType || "application/octet-stream",
       });
@@ -392,7 +468,7 @@ export function ChatShell({ room }: { room: Room }) {
   const submitMessage = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!draft.trim() && !selectedFile) return;
-    if (!supabase || !roomKey || !activeChannel) {
+    if (!supabase || !roomKey || !activeChannel || !currentRoomKeyId) {
       toast.error("Sua chave da sala ainda nao esta disponivel.");
       return;
     }
@@ -417,6 +493,7 @@ export function ChatShell({ room }: { room: Room }) {
           {
             room_id: room.id,
             channel_id: activeChannel.id,
+            room_key_id: currentRoomKeyId,
             user_id: user.id,
             ciphertext: encryptedCaption.ciphertext,
             iv: encryptedCaption.nonce,
@@ -482,6 +559,7 @@ export function ChatShell({ room }: { room: Room }) {
         {
           room_id: room.id,
           channel_id: activeChannel.id,
+          room_key_id: currentRoomKeyId,
           user_id: user.id,
           ciphertext: payload.ciphertext,
           iv: payload.nonce,

@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { encryptRoomKeyForInvite, generateInviteSecret, openRoomKeyEnvelope } from "@/lib/crypto/e2ee";
+import { encryptRoomKeyForInvite, generateInviteSecret, generateRoomKey, openRoomKeyEnvelope, sealRoomKeyForMember } from "@/lib/crypto/e2ee";
 import { loadStoredIdentity } from "@/lib/crypto/identity-store";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { slugify } from "@/lib/utils";
@@ -32,6 +32,8 @@ export function RoomSettingsPanel({ room }: { room: Room }) {
   const [inviteLoading, setInviteLoading] = useState(false);
   const [memberActionId, setMemberActionId] = useState<string | null>(null);
   const [channels, setChannels] = useState(room.channels);
+  const [currentRoomKeyId, setCurrentRoomKeyId] = useState<string | null>(room.currentRoomKeyId ?? null);
+  const [currentRoomKeyVersion, setCurrentRoomKeyVersion] = useState<number>(room.currentRoomKeyVersion ?? 1);
   const [channelName, setChannelName] = useState("");
   const [channelDescription, setChannelDescription] = useState("");
   const [channelKind, setChannelKind] = useState<"announcement" | "topic">("topic");
@@ -150,26 +152,139 @@ export function RoomSettingsPanel({ room }: { room: Room }) {
     setMemberActionId(member.id);
 
     try {
-      const { error } = await supabase
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        toast.error("Sua sessao expirou.");
+        router.push("/login" as Route);
+        return;
+      }
+
+      const remainingMembers = members.filter((entry) => entry.id !== member.id);
+      const missingKey = remainingMembers.find((entry) => !entry.user.publicKey);
+      if (remainingMembers.length === 0) {
+        toast.error("A sala precisa manter pelo menos um membro com acesso a chave.");
+        return;
+      }
+      if (missingKey) {
+        toast.error(`Falta a chave publica de ${missingKey.user.name} para rotacionar a sala.`);
+        return;
+      }
+
+      const newRoomKey = await generateRoomKey();
+      const encryptedKeys = await Promise.all(
+        remainingMembers.map(async (entry) => ({
+          userId: entry.user.id,
+          encryptedRoomKey: await sealRoomKeyForMember(newRoomKey, entry.user.publicKey as string),
+        })),
+      );
+
+      const roomKeyPayload = [
+        {
+          room_id: room.id,
+          version: currentRoomKeyVersion + 1,
+          created_by: user.id,
+        } satisfies Database["public"]["Tables"]["room_keys"]["Insert"],
+      ];
+      const { data: roomKeyRows, error: roomKeyError } = await supabase
+        .from("room_keys")
+        .insert(roomKeyPayload as never)
+        .select("*")
+        .returns<Database["public"]["Tables"]["room_keys"]["Row"][]>();
+      const nextRoomKey = roomKeyRows?.[0] ?? null;
+
+      if (roomKeyError || !nextRoomKey) {
+        toast.error(roomKeyError?.message ?? "Nao foi possivel criar a nova versao da chave.");
+        return;
+      }
+
+      const memberRows = remainingMembers.map((entry) => ({
+        room_id: room.id,
+        user_id: entry.user.id,
+        role: entry.role,
+        encrypted_room_key: encryptedKeys.find((key) => key.userId === entry.user.id)?.encryptedRoomKey ?? entry.encryptedRoomKey ?? "",
+        current_room_key_id: nextRoomKey.id,
+      })) satisfies Database["public"]["Tables"]["room_members"]["Insert"][];
+      const { error: memberUpsertError } = await supabase.from("room_members").upsert(memberRows as never, {
+        onConflict: "room_id,user_id",
+      });
+
+      if (memberUpsertError) {
+        toast.error(memberUpsertError.message);
+        return;
+      }
+
+      const memberKeyRows = encryptedKeys.map((entry) => ({
+        room_key_id: nextRoomKey.id,
+        room_id: room.id,
+        user_id: entry.userId,
+        encrypted_room_key: entry.encryptedRoomKey,
+      })) satisfies Database["public"]["Tables"]["room_member_keys"]["Insert"][];
+      const { error: memberKeyError } = await supabase.from("room_member_keys").insert(memberKeyRows as never);
+
+      if (memberKeyError) {
+        toast.error(memberKeyError.message);
+        return;
+      }
+
+      const { error: roomUpdateError } = await supabase
+        .from("rooms")
+        .update({ current_room_key_id: nextRoomKey.id } as never)
+        .eq("id", room.id);
+
+      if (roomUpdateError) {
+        toast.error(roomUpdateError.message);
+        return;
+      }
+
+      const { error: inviteDeleteError } = await supabase.from("room_invites").delete().eq("room_id", room.id);
+      if (inviteDeleteError) {
+        toast.error(inviteDeleteError.message);
+        return;
+      }
+
+      const { error: memberKeyDeleteError } = await supabase
+        .from("room_member_keys")
+        .delete()
+        .eq("room_id", room.id)
+        .eq("user_id", member.user.id);
+      if (memberKeyDeleteError) {
+        toast.error(memberKeyDeleteError.message);
+        return;
+      }
+
+      const { error: memberDeleteError } = await supabase
         .from("room_members")
         .delete()
         .eq("room_id", room.id)
         .eq("user_id", member.user.id);
 
-      if (error) {
-        toast.error(error.message);
+      if (memberDeleteError) {
+        toast.error(memberDeleteError.message);
         return;
       }
 
-      setMembers((current) => current.filter((entry) => entry.id !== member.id));
-      toast.success("Membro removido da sala.");
+      setMembers(
+        remainingMembers.map((entry) => ({
+          ...entry,
+          encryptedRoomKey: encryptedKeys.find((key) => key.userId === entry.user.id)?.encryptedRoomKey ?? entry.encryptedRoomKey,
+          currentRoomKeyId: nextRoomKey.id,
+        })),
+      );
+      setCurrentRoomKeyId(nextRoomKey.id);
+      setCurrentRoomKeyVersion(nextRoomKey.version);
+      setLatestInviteLink(null);
+      toast.success("Membro removido e chave da sala rotacionada para proteger as mensagens futuras.");
+      router.refresh();
     } finally {
       setMemberActionId(null);
     }
   };
 
   const createInvite = async () => {
-    if (!supabase || !room.currentUserId || !currentMember?.encryptedRoomKey) {
+    if (!supabase || !room.currentUserId || !currentMember?.encryptedRoomKey || !currentRoomKeyId) {
       toast.error("Sua chave da sala ainda nao esta disponivel.");
       return;
     }

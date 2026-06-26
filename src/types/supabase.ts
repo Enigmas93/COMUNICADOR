@@ -57,6 +57,7 @@ export interface Database {
           description: string | null;
           is_public: boolean;
           owner_id: string;
+          current_room_key_id: string | null;
           created_at: string;
         };
         Insert: {
@@ -66,6 +67,7 @@ export interface Database {
           description?: string | null;
           is_public?: boolean;
           owner_id: string;
+          current_room_key_id?: string | null;
           created_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["rooms"]["Insert"]>;
@@ -76,6 +78,7 @@ export interface Database {
           user_id: string;
           role: "admin" | "member";
           encrypted_room_key: string;
+          current_room_key_id: string;
           joined_at: string;
         };
         Insert: {
@@ -83,15 +86,51 @@ export interface Database {
           user_id: string;
           role?: "admin" | "member";
           encrypted_room_key: string;
+          current_room_key_id: string;
           joined_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["room_members"]["Insert"]>;
+      };
+      room_keys: {
+        Row: {
+          id: string;
+          room_id: string;
+          version: number;
+          created_by: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          room_id: string;
+          version: number;
+          created_by: string;
+          created_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["room_keys"]["Insert"]>;
+      };
+      room_member_keys: {
+        Row: {
+          room_key_id: string;
+          room_id: string;
+          user_id: string;
+          encrypted_room_key: string;
+          created_at: string;
+        };
+        Insert: {
+          room_key_id: string;
+          room_id: string;
+          user_id: string;
+          encrypted_room_key: string;
+          created_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["room_member_keys"]["Insert"]>;
       };
       messages: {
         Row: {
           id: string;
           room_id: string;
           channel_id: string | null;
+          room_key_id: string;
           user_id: string;
           ciphertext: string;
           iv: string;
@@ -102,6 +141,7 @@ export interface Database {
           id?: string;
           room_id: string;
           channel_id: string;
+          room_key_id: string;
           user_id: string;
           ciphertext: string;
           iv: string;

@@ -32,12 +32,20 @@ export interface RoomMember {
   role: MemberRole;
   joinedAt: string;
   encryptedRoomKey?: string;
+  currentRoomKeyId?: string;
+}
+
+export interface RoomKeyAccess {
+  roomKeyId: string;
+  encryptedRoomKey: string;
+  createdAt?: string;
 }
 
 export interface ChatMessage {
   id: string;
   roomId: string;
   channelId: string;
+  roomKeyId?: string;
   author: UserProfile;
   type: MessageKind;
   body: string;
@@ -81,4 +89,7 @@ export interface Room {
   unreadCount: number;
   currentUserId?: string;
   currentUserRole?: MemberRole | null;
+  currentRoomKeyId?: string | null;
+  currentRoomKeyVersion?: number | null;
+  keyAccesses?: RoomKeyAccess[];
 }

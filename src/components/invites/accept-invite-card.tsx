@@ -37,6 +37,7 @@ export function AcceptInviteCard({
     slug: string;
     description: string;
     isPublic: boolean;
+    currentRoomKeyId?: string | null;
   };
   authenticated: boolean;
   isMember: boolean;
@@ -123,15 +124,22 @@ export function AcceptInviteCard({
       );
       const encryptedRoomKey = await sealRoomKeyForMember(roomKey, profile.public_key);
 
-      const { error: memberError } = await supabase.from("room_members").upsert(
-        [
-          {
+      if (!room.currentRoomKeyId) {
+        toast.error("A sala ainda nao possui uma versao de chave ativa.");
+        return;
+      }
+
+      const memberPayload = [
+        {
           room_id: room.id,
           user_id: user.id,
           role: "member",
           encrypted_room_key: encryptedRoomKey,
-          } satisfies Database["public"]["Tables"]["room_members"]["Insert"],
-        ] as never,
+          current_room_key_id: room.currentRoomKeyId,
+        } satisfies Database["public"]["Tables"]["room_members"]["Insert"],
+      ];
+      const { error: memberError } = await supabase.from("room_members").upsert(
+        memberPayload as never,
         {
           onConflict: "room_id,user_id",
         },
@@ -139,6 +147,23 @@ export function AcceptInviteCard({
 
       if (memberError) {
         toast.error(memberError.message);
+        return;
+      }
+
+      const memberKeyPayload = [
+        {
+          room_key_id: room.currentRoomKeyId,
+          room_id: room.id,
+          user_id: user.id,
+          encrypted_room_key: encryptedRoomKey,
+        } satisfies Database["public"]["Tables"]["room_member_keys"]["Insert"],
+      ];
+      const { error: memberKeyError } = await supabase.from("room_member_keys").upsert(memberKeyPayload as never, {
+        onConflict: "room_key_id,user_id",
+      });
+
+      if (memberKeyError) {
+        toast.error(memberKeyError.message);
         return;
       }
 

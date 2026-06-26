@@ -80,8 +80,6 @@ export function CreateRoomForm() {
     }
 
     const roomKey = await generateRoomKey();
-    const encryptedRoomKey = await sealRoomKeyForMember(roomKey, profile.public_key);
-
     const roomPayload = [
       {
         name: values.name,
@@ -104,12 +102,33 @@ export function CreateRoomForm() {
       return;
     }
 
+    const encryptedRoomKey = await sealRoomKeyForMember(roomKey, profile.public_key);
+    const keyPayload = [
+      {
+        room_id: room.id,
+        version: 1,
+        created_by: user.id,
+      } satisfies Database["public"]["Tables"]["room_keys"]["Insert"],
+    ];
+    const { data: roomKeyRows, error: roomKeyError } = await supabase
+      .from("room_keys")
+      .insert(keyPayload as never)
+      .select("*")
+      .returns<Database["public"]["Tables"]["room_keys"]["Row"][]>();
+    const currentRoomKey = roomKeyRows?.[0] ?? null;
+
+    if (roomKeyError || !currentRoomKey) {
+      toast.error(roomKeyError?.message ?? "Nao foi possivel registrar a chave inicial da sala.");
+      return;
+    }
+
     const memberPayload = [
       {
         room_id: room.id,
         user_id: user.id,
         role: "admin",
         encrypted_room_key: encryptedRoomKey,
+        current_room_key_id: currentRoomKey.id,
       } satisfies Database["public"]["Tables"]["room_members"]["Insert"],
     ];
 
@@ -117,6 +136,31 @@ export function CreateRoomForm() {
 
     if (memberError) {
       toast.error(memberError.message);
+      return;
+    }
+
+    const { error: roomUpdateError } = await supabase
+      .from("rooms")
+      .update({ current_room_key_id: currentRoomKey.id } as never)
+      .eq("id", room.id);
+
+    if (roomUpdateError) {
+      toast.error(roomUpdateError.message);
+      return;
+    }
+
+    const memberKeyPayload = [
+      {
+        room_key_id: currentRoomKey.id,
+        room_id: room.id,
+        user_id: user.id,
+        encrypted_room_key: encryptedRoomKey,
+      } satisfies Database["public"]["Tables"]["room_member_keys"]["Insert"],
+    ];
+    const { error: memberKeyError } = await supabase.from("room_member_keys").insert(memberKeyPayload as never);
+
+    if (memberKeyError) {
+      toast.error(memberKeyError.message);
       return;
     }
 
