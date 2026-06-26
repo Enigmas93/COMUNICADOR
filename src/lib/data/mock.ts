@@ -84,6 +84,8 @@ export const mockRooms: Room[] = [
         maxUses: 10,
       },
     ],
+    currentUserId: currentUser.id,
+    currentUserRole: "admin",
   },
   {
     id: "room_publico",
@@ -112,6 +114,8 @@ export const mockRooms: Room[] = [
       },
     ],
     invites: [],
+    currentUserId: currentUser.id,
+    currentUserRole: "member",
   },
 ];
 

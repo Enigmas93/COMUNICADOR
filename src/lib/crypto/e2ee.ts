@@ -8,6 +8,11 @@ export interface CipherEnvelope {
   nonce: string;
 }
 
+export interface BinaryCipherEnvelope extends CipherEnvelope {
+  size: number;
+  mimeType?: string;
+}
+
 const PRIVATE_KEY_CONTEXT = "aurora-private-key";
 
 function getCryptoApi() {
@@ -44,6 +49,10 @@ function fromBase64(value: string) {
   }
 
   return bytes;
+}
+
+export function decodeBase64(value: string) {
+  return fromBase64(value);
 }
 
 function utf8Encode(value: string) {
@@ -108,6 +117,11 @@ export async function generateRoomKey() {
   const crypto = getCryptoApi();
   const roomKey = crypto.getRandomValues(new Uint8Array(32));
   return toBase64(roomKey);
+}
+
+export async function generateInviteSecret() {
+  const crypto = getCryptoApi();
+  return toBase64(crypto.getRandomValues(new Uint8Array(32)));
 }
 
 export async function sealRoomKeyForMember(roomKey: string, memberPublicKey: string) {
@@ -198,6 +212,135 @@ export async function decryptMessage(payload: CipherEnvelope, roomKey: string) {
   );
 
   return utf8Decode(cleartext);
+}
+
+export async function encryptBinary(data: ArrayBuffer, roomKey: string, mimeType?: string): Promise<BinaryCipherEnvelope> {
+  const crypto = getCryptoApi();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const normalizedData = new Uint8Array(data);
+  const secretKey = await crypto.subtle.importKey(
+    "raw",
+    fromBase64(roomKey),
+    {
+      name: "AES-GCM",
+      length: 256,
+    },
+    false,
+    ["encrypt"],
+  );
+  const ciphertext = await crypto.subtle.encrypt(
+    {
+      name: "AES-GCM",
+      iv,
+    },
+    secretKey,
+    normalizedData,
+  );
+
+  return {
+    ciphertext: toBase64(new Uint8Array(ciphertext)),
+    nonce: toBase64(iv),
+    size: normalizedData.byteLength,
+    mimeType,
+  };
+}
+
+export async function decryptBinary(payload: CipherEnvelope, roomKey: string) {
+  const crypto = getCryptoApi();
+  const secretKey = await crypto.subtle.importKey(
+    "raw",
+    fromBase64(roomKey),
+    {
+      name: "AES-GCM",
+      length: 256,
+    },
+    false,
+    ["decrypt"],
+  );
+  const cleartext = await crypto.subtle.decrypt(
+    {
+      name: "AES-GCM",
+      iv: fromBase64(payload.nonce),
+    },
+    secretKey,
+    fromBase64(payload.ciphertext),
+  );
+
+  return cleartext;
+}
+
+export async function decryptBinaryBytes(ciphertext: ArrayBuffer, nonce: string, roomKey: string) {
+  const crypto = getCryptoApi();
+  const secretKey = await crypto.subtle.importKey(
+    "raw",
+    fromBase64(roomKey),
+    {
+      name: "AES-GCM",
+      length: 256,
+    },
+    false,
+    ["decrypt"],
+  );
+  return crypto.subtle.decrypt(
+    {
+      name: "AES-GCM",
+      iv: fromBase64(nonce),
+    },
+    secretKey,
+    ciphertext,
+  );
+}
+
+export async function encryptRoomKeyForInvite(roomKey: string, inviteSecret: string): Promise<CipherEnvelope> {
+  const crypto = getCryptoApi();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const secretKey = await crypto.subtle.importKey(
+    "raw",
+    fromBase64(inviteSecret),
+    {
+      name: "AES-GCM",
+      length: 256,
+    },
+    false,
+    ["encrypt"],
+  );
+  const ciphertext = await crypto.subtle.encrypt(
+    {
+      name: "AES-GCM",
+      iv,
+    },
+    secretKey,
+    fromBase64(roomKey),
+  );
+
+  return {
+    ciphertext: toBase64(new Uint8Array(ciphertext)),
+    nonce: toBase64(iv),
+  };
+}
+
+export async function decryptInviteRoomKey(payload: CipherEnvelope, inviteSecret: string) {
+  const crypto = getCryptoApi();
+  const secretKey = await crypto.subtle.importKey(
+    "raw",
+    fromBase64(inviteSecret),
+    {
+      name: "AES-GCM",
+      length: 256,
+    },
+    false,
+    ["decrypt"],
+  );
+  const cleartext = await crypto.subtle.decrypt(
+    {
+      name: "AES-GCM",
+      iv: fromBase64(payload.nonce),
+    },
+    secretKey,
+    fromBase64(payload.ciphertext),
+  );
+
+  return toBase64(new Uint8Array(cleartext));
 }
 
 export async function encryptPrivateKeyForBackup(privateKey: string, password: string) {

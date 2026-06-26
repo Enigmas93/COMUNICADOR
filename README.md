@@ -68,46 +68,108 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 
 ## Como Rodar
 
+1. Instale as dependencias.
+2. Aplique as migrations no projeto Supabase.
+3. Suba o ambiente local do Next.
+
 ```bash
 npm install
+npx supabase db push
 npm run dev
 ```
 
-## Testes
+## Fluxos Implementados
+
+O repositório ja entrega uma base funcional conectada ao Supabase:
+
+- autenticacao real com e-mail/senha, Google OAuth e magic link
+- callback de autenticacao com `exchangeCodeForSession` e `verifyOtp`
+- bootstrap da identidade criptografica do usuario no primeiro acesso
+- criacao de salas com canais padrao `geral` e `anuncios`
+- dashboard real com salas do usuario e diretorio publico
+- chat por canal com mensagens E2EE, reacoes e realtime
+- upload e download de anexos cifrados via `Supabase Storage`
+- convites E2EE com segredo no fragmento da URL (`#k=...`)
+- painel administrativo para membros, cargos, convites e canais
+- PWA basico com manifesto, service worker e rota offline
+- CI com lint, typecheck, build, testes unitarios e smoke E2E
+
+## Autenticacao
+
+Os fluxos de login ficam em `src/components/auth/auth-form.tsx` e `src/app/auth/callback/route.ts`.
+
+- `Entrar`: usa `signInWithPassword`
+- `Criar conta`: usa `signUp` com `emailRedirectTo`
+- `Google`: usa `signInWithOAuth`
+- `Magic link`: usa `signInWithOtp`
+- `Callback`: aceita tanto `code` quanto `token_hash` + `type`
+
+## Modelo E2EE Em Producao
+
+O pipeline criptografico principal fica em `src/lib/crypto/e2ee.ts`:
+
+- identidade assimetrica por usuario gerada no cliente
+- chave simetrica unica por sala
+- envelopes RSA-OAEP para distribuir a chave da sala por membro
+- convites com wrap da chave da sala baseado em segredo temporario
+- mensagens e anexos protegidos com AES-GCM antes de sair do cliente
+- armazenamento local da identidade para reabrir a sala sem depender do servidor
+
+## Banco, Storage e RLS
+
+As migrations relevantes estao em `supabase/migrations`:
+
+- `0001_initial_schema.sql`: schema inicial, enums, tabelas centrais e RLS
+- `0003_invite_key_wrap.sql`: suporte a convites E2EE com chave da sala envelopada
+- `0004_channels_files_and_storage.sql`: canais, `channel_id` em mensagens, bucket `room-files` e policies do storage
+
+Hoje o banco cobre:
+
+- `users`, `rooms`, `room_members`, `room_channels`
+- `messages`, `files`, `reactions`, `room_invites`
+- policies de leitura/escrita por membro
+- storage privado para anexos cifrados
+
+## Proxy Do Next
+
+O refresh de sessao do Supabase SSR agora usa `src/proxy.ts`, substituindo o antigo `middleware.ts` e removendo o aviso de deprecacao do Next 16.
+
+## Testes E Validacao
+
+Scripts principais:
 
 ```bash
+npm run lint
+npm run typecheck
+npm run build
 npm run test
 npm run test:e2e
 ```
 
-## Banco e RLS
+Validacao mais recente desta etapa:
 
-O schema inicial esta em `supabase/migrations/0001_initial_schema.sql` e cobre:
-
-- `users`, `rooms`, `room_members`, `messages`, `files`, `reactions`, `room_invites`
-- RLS em todas as tabelas sensiveis
-- select/insert de `messages` restrito a membros da sala
-- promocao e manutencao de `room_members` apenas por admins
-- salas publicas visiveis no diretorio e privadas visiveis apenas para membros
+- `npm run lint`: ok
+- `npm run typecheck`: ok
+- `npm run build`: ok
+- `npm run test`: ok
+- `npm run test:e2e`: smoke ajustado para rotas deterministicas locais
 
 ## Estado Atual
 
-Este repositório ja inclui:
+Este app ja esta em um ponto de base comercial funcional para continuar endurecimento:
 
-- landing page
-- dashboard
-- fluxo de criacao de sala
-- tela de chat
-- fluxo de convite
-- modulo de criptografia com testes unitarios
-- testes E2E de fluxos principais
-- service worker basico
-- workflow de CI
+- frontend comercial em `Next.js 16` com App Router
+- backend real em `Supabase Auth`, Postgres, Realtime e Storage
+- convites E2EE reais e aceite no cliente
+- canais persistidos com administracao por sala
+- anexos e reacoes persistidos no banco
+- tipagem forte de dominio e banco
+- suite inicial de testes automatizados
 
-## Proximos Passos Naturais
+## Proximos Passos Recomendados
 
-- conectar `Supabase Auth` real nas telas de login
-- substituir o mock local por queries reais com `TanStack Query`
-- configurar buckets e policies de `Storage`
-- adicionar rotacao de chave por remocao de membro
-- completar push notifications com Edge Functions
+- implementar rotacao de chave da sala quando um membro for removido
+- adicionar notificacoes push reais para PWA
+- expandir E2E autenticado com seed de usuario/sala de teste
+- reforcar observabilidade e telemetria de erros para producao
+- preparar billing, trial e limites de plano para comercializacao SaaS

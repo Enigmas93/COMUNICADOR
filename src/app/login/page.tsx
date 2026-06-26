@@ -1,3 +1,4 @@
+import type { Route } from "next";
 import { redirect } from "next/navigation";
 import { KeyRound, Mail, Sparkles } from "lucide-react";
 
@@ -6,9 +7,14 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { getSession } from "@/lib/supabase/auth";
 
-export default async function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ next?: string }>;
+}) {
   const session = await getSession();
-  if (session) redirect("/dashboard");
+  const resolvedSearchParams = (await searchParams) ?? {};
+  if (session) redirect((resolvedSearchParams.next ?? "/dashboard") as Route);
 
   return (
     <main className="mx-auto max-w-4xl">

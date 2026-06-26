@@ -1,9 +1,14 @@
 import {
+  decryptBinary,
   decryptMessage,
   decryptPrivateKeyBackup,
+  decryptInviteRoomKey,
+  encryptBinary,
+  encryptRoomKeyForInvite,
   encryptMessage,
   encryptPrivateKeyForBackup,
   generateIdentityKeyPair,
+  generateInviteSecret,
   generateRoomKey,
   openRoomKeyEnvelope,
   sealRoomKeyForMember,
@@ -33,5 +38,23 @@ describe("e2ee helpers", () => {
     const restored = await decryptPrivateKeyBackup(backup, "senha-super-forte");
 
     expect(restored).toBe(identity.privateKey);
+  });
+
+  it("cifra e decifra binarios com a chave da sala", async () => {
+    const roomKey = await generateRoomKey();
+    const source = new Uint8Array([10, 20, 30, 40, 50]).buffer;
+    const encrypted = await encryptBinary(source, roomKey, "application/octet-stream");
+    const decrypted = await decryptBinary(encrypted, roomKey);
+
+    expect(Array.from(new Uint8Array(decrypted))).toEqual([10, 20, 30, 40, 50]);
+  });
+
+  it("abre a chave da sala via segredo de convite", async () => {
+    const roomKey = await generateRoomKey();
+    const inviteSecret = await generateInviteSecret();
+    const wrapped = await encryptRoomKeyForInvite(roomKey, inviteSecret);
+    const opened = await decryptInviteRoomKey(wrapped, inviteSecret);
+
+    expect(opened).toBe(roomKey);
   });
 });

@@ -1,10 +1,11 @@
 "use client";
 
+import type { Route } from "next";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Globe, LoaderCircle } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { Globe, LoaderCircle, Mail } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
 
@@ -23,12 +24,17 @@ type FormValues = z.infer<typeof schema>;
 
 export function AuthForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [oauthLoading, setOauthLoading] = useState(false);
+  const [magicLinkLoading, setMagicLinkLoading] = useState(false);
   const supabase = createSupabaseBrowserClient();
+  const nextPath = searchParams.get("next") ?? "/dashboard";
   const {
+    control,
     register,
     handleSubmit,
+    trigger,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -38,6 +44,7 @@ export function AuthForm() {
       password: "",
     },
   });
+  const email = useWatch({ control, name: "email" });
 
   const onSubmit = handleSubmit(async (values) => {
     if (!supabase) {
@@ -57,7 +64,7 @@ export function AuthForm() {
       }
 
       toast.success("Sessao iniciada com sucesso.");
-      router.push("/dashboard");
+      router.push(nextPath as Route);
       router.refresh();
       return;
     }
@@ -66,7 +73,7 @@ export function AuthForm() {
       email: values.email,
       password: values.password,
       options: {
-        emailRedirectTo: `${env.NEXT_PUBLIC_APP_URL}/auth/callback`,
+        emailRedirectTo: `${env.NEXT_PUBLIC_APP_URL}/auth/callback?next=${encodeURIComponent(nextPath)}`,
         data: {
           name: values.name,
         },
@@ -81,7 +88,7 @@ export function AuthForm() {
     toast.success("Conta criada.", {
       description: "Se sua instância exigir confirmação de e-mail, verifique sua caixa de entrada.",
     });
-    router.push("/dashboard");
+    router.push(nextPath as Route);
     router.refresh();
   });
 
@@ -95,7 +102,7 @@ export function AuthForm() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${env.NEXT_PUBLIC_APP_URL}/auth/callback`,
+        redirectTo: `${env.NEXT_PUBLIC_APP_URL}/auth/callback?next=${encodeURIComponent(nextPath)}`,
       },
     });
 
@@ -103,6 +110,39 @@ export function AuthForm() {
       toast.error(error.message);
       setOauthLoading(false);
     }
+  };
+
+  const handleMagicLink = async () => {
+    if (!supabase) {
+      toast.error("Configure o Supabase antes de autenticar.");
+      return;
+    }
+
+    const validEmail = await trigger("email");
+    if (!validEmail || !email) {
+      toast.error("Informe um e-mail valido para receber o magic link.");
+      return;
+    }
+
+    setMagicLinkLoading(true);
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        emailRedirectTo: `${env.NEXT_PUBLIC_APP_URL}/auth/callback?next=${encodeURIComponent(nextPath)}`,
+        shouldCreateUser: true,
+      },
+    });
+
+    if (error) {
+      toast.error(error.message);
+      setMagicLinkLoading(false);
+      return;
+    }
+
+    toast.success("Magic link enviado.", {
+      description: "Abra o e-mail neste mesmo dispositivo para concluir o login seguro.",
+    });
+    setMagicLinkLoading(false);
   };
 
   return (
@@ -175,6 +215,15 @@ export function AuthForm() {
           >
             {oauthLoading ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : <Globe className="mr-2 size-4" />}
             Google
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={handleMagicLink}
+            disabled={magicLinkLoading || !isSupabaseConfigured}
+          >
+            {magicLinkLoading ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : <Mail className="mr-2 size-4" />}
+            Magic link
           </Button>
         </div>
       </form>

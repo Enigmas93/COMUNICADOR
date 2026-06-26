@@ -3,6 +3,31 @@ export type Json = string | number | boolean | null | { [key: string]: Json | un
 export interface Database {
   public: {
     Tables: {
+      room_channels: {
+        Row: {
+          id: string;
+          room_id: string;
+          name: string;
+          slug: string;
+          description: string | null;
+          kind: "general" | "announcement" | "topic";
+          position: number;
+          created_by: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          room_id: string;
+          name: string;
+          slug: string;
+          description?: string | null;
+          kind?: "general" | "announcement" | "topic";
+          position?: number;
+          created_by: string;
+          created_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["room_channels"]["Insert"]>;
+      };
       users: {
         Row: {
           id: string;
@@ -66,6 +91,7 @@ export interface Database {
         Row: {
           id: string;
           room_id: string;
+          channel_id: string | null;
           user_id: string;
           ciphertext: string;
           iv: string;
@@ -75,6 +101,7 @@ export interface Database {
         Insert: {
           id?: string;
           room_id: string;
+          channel_id: string;
           user_id: string;
           ciphertext: string;
           iv: string;
@@ -88,6 +115,7 @@ export interface Database {
           id: string;
           message_id: string;
           room_id: string;
+          channel_id: string | null;
           storage_path: string;
           encrypted: boolean;
           iv: string;
@@ -99,6 +127,7 @@ export interface Database {
           id?: string;
           message_id: string;
           room_id: string;
+          channel_id?: string | null;
           storage_path: string;
           encrypted?: boolean;
           iv: string;
@@ -107,6 +136,21 @@ export interface Database {
           name: string;
         };
         Update: Partial<Database["public"]["Tables"]["files"]["Insert"]>;
+      };
+      reactions: {
+        Row: {
+          message_id: string;
+          user_id: string;
+          emoji: string;
+          created_at: string;
+        };
+        Insert: {
+          message_id: string;
+          user_id: string;
+          emoji: string;
+          created_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["reactions"]["Insert"]>;
       };
       room_invites: {
         Row: {
@@ -117,6 +161,8 @@ export interface Database {
           expires_at: string;
           max_uses: number;
           uses: number;
+          key_wrap_ciphertext: string | null;
+          key_wrap_iv: string | null;
         };
         Insert: {
           id?: string;
@@ -126,6 +172,8 @@ export interface Database {
           expires_at: string;
           max_uses?: number;
           uses?: number;
+          key_wrap_ciphertext?: string | null;
+          key_wrap_iv?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["room_invites"]["Insert"]>;
       };

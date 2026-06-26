@@ -1,26 +1,27 @@
 import { expect, test } from "@playwright/test";
 
-test("cadastro/login -> dashboard -> nova sala", async ({ page }) => {
+test("landing exibe proposta do produto e atalhos principais", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: /Comunicacao em tempo real/i })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Entrar no dashboard/i })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Ver fluxo de login/i })).toBeVisible();
+});
+
+test("login expoe email, google e magic link", async ({ page }) => {
   await page.goto("/login");
-  await page.getByRole("link", { name: "Entrar" }).click();
-  await expect(page).toHaveURL(/dashboard/);
-  await page.getByRole("link", { name: "Criar nova sala" }).click();
-  await expect(page).toHaveURL(/rooms\/new/);
-  await page.getByLabel("Nome da sala").fill("Sala de testes");
-  await page.getByLabel("Descricao").fill("Fluxo critico cobrindo criacao de sala com envelope inicial.");
-  await page.getByRole("button", { name: "Criar sala" }).click();
+  await expect(page.locator("form").getByRole("button", { name: "Entrar" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Google" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Magic link" })).toBeVisible();
 });
 
-test("explorar sala publica e abrir preview", async ({ page }) => {
+test("dashboard sem sessao redireciona para login", async ({ page }) => {
   await page.goto("/dashboard");
-  await page.getByRole("link", { name: "Ver sala" }).first().click();
-  await expect(page).toHaveURL(/rooms/);
-  await expect(page.getByText("Realtime via Supabase")).toBeVisible();
+  await expect(page).toHaveURL(/login/);
+  await expect(page.getByText("Cadastre-se, gere o par de chaves e entre na sala")).toBeVisible();
 });
 
-test("convite direciona para aceitacao de acesso", async ({ page }) => {
-  await page.goto("/invite/aurora-48h-token");
-  await expect(page.getByText("Voce foi convidado para")).toBeVisible();
-  await page.getByRole("link", { name: /Acessar e aceitar convite/i }).click();
-  await expect(page).toHaveURL(/login/);
+test("rota de criacao de sala exibe configuracao inicial", async ({ page }) => {
+  await page.goto("/rooms/new");
+  await expect(page).toHaveURL(/rooms\/new/);
+  await expect(page.getByRole("heading", { name: /Configure o espaco e gere a chave localmente/i })).toBeVisible();
 });

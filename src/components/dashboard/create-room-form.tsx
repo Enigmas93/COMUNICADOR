@@ -120,6 +120,34 @@ export function CreateRoomForm() {
       return;
     }
 
+    const channelPayload = [
+      {
+        room_id: room.id,
+        name: "geral",
+        slug: "geral",
+        description: "Canal principal para conversas do time.",
+        kind: "general",
+        position: 0,
+        created_by: user.id,
+      } satisfies Database["public"]["Tables"]["room_channels"]["Insert"],
+      {
+        room_id: room.id,
+        name: "anuncios",
+        slug: "anuncios",
+        description: "Avisos e comunicados oficiais da sala.",
+        kind: "announcement",
+        position: 1,
+        created_by: user.id,
+      } satisfies Database["public"]["Tables"]["room_channels"]["Insert"],
+    ];
+
+    const { error: channelError } = await supabase.from("room_channels").insert(channelPayload as never);
+
+    if (channelError) {
+      toast.error(channelError.message);
+      return;
+    }
+
     toast.success("Sala criada com sucesso.", {
       description:
         values.visibility === "private"

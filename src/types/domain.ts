@@ -12,9 +12,18 @@ export interface UserProfile {
 
 export interface RoomChannel {
   id: string;
+  roomId?: string;
   name: string;
+  slug?: string;
   description: string;
   kind: ChannelKind;
+  position?: number;
+}
+
+export interface MessageReaction {
+  emoji: string;
+  count: number;
+  reactedByCurrentUser: boolean;
 }
 
 export interface RoomMember {
@@ -36,10 +45,15 @@ export interface ChatMessage {
   iv?: string;
   createdAt: string;
   attachment?: {
+    id?: string;
     name: string;
     size: number;
     mimeType: string;
+    storagePath?: string;
+    iv?: string;
+    encrypted?: boolean;
   };
+  reactions?: MessageReaction[];
 }
 
 export interface RoomInvite {
@@ -49,6 +63,8 @@ export interface RoomInvite {
   expiresAt: string;
   uses: number;
   maxUses: number;
+  keyWrapCiphertext?: string | null;
+  keyWrapIv?: string | null;
 }
 
 export interface Room {
@@ -63,4 +79,6 @@ export interface Room {
   messages: ChatMessage[];
   invites: RoomInvite[];
   unreadCount: number;
+  currentUserId?: string;
+  currentUserRole?: MemberRole | null;
 }
