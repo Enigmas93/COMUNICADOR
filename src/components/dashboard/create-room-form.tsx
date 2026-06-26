@@ -80,55 +80,50 @@ export function CreateRoomForm() {
     }
 
     const roomKey = await generateRoomKey();
+    const roomId = crypto.randomUUID();
+    const roomKeyId = crypto.randomUUID();
+    const roomSlug = values.slug;
     const roomPayload = [
       {
+        id: roomId,
         name: values.name,
-        slug: values.slug,
+        slug: roomSlug,
         description: values.description,
         is_public: values.visibility === "public",
         owner_id: user.id,
       } satisfies Database["public"]["Tables"]["rooms"]["Insert"],
     ];
 
-    const { data: roomRows, error: roomError } = await supabase
-      .from("rooms")
-      .insert(roomPayload as never)
-      .select("*")
-      .returns<Database["public"]["Tables"]["rooms"]["Row"][]>();
-    const room = roomRows?.[0] ?? null;
+    const { error: roomError } = await supabase.from("rooms").insert(roomPayload as never);
 
-    if (roomError || !room) {
-      toast.error(roomError?.message ?? "Nao foi possivel criar a sala.");
+    if (roomError) {
+      toast.error(roomError.message);
       return;
     }
 
     const encryptedRoomKey = await sealRoomKeyForMember(roomKey, profile.public_key);
     const keyPayload = [
       {
-        room_id: room.id,
+        id: roomKeyId,
+        room_id: roomId,
         version: 1,
         created_by: user.id,
       } satisfies Database["public"]["Tables"]["room_keys"]["Insert"],
     ];
-    const { data: roomKeyRows, error: roomKeyError } = await supabase
-      .from("room_keys")
-      .insert(keyPayload as never)
-      .select("*")
-      .returns<Database["public"]["Tables"]["room_keys"]["Row"][]>();
-    const currentRoomKey = roomKeyRows?.[0] ?? null;
+    const { error: roomKeyError } = await supabase.from("room_keys").insert(keyPayload as never);
 
-    if (roomKeyError || !currentRoomKey) {
-      toast.error(roomKeyError?.message ?? "Nao foi possivel registrar a chave inicial da sala.");
+    if (roomKeyError) {
+      toast.error(roomKeyError.message);
       return;
     }
 
     const memberPayload = [
       {
-        room_id: room.id,
+        room_id: roomId,
         user_id: user.id,
         role: "admin",
         encrypted_room_key: encryptedRoomKey,
-        current_room_key_id: currentRoomKey.id,
+        current_room_key_id: roomKeyId,
       } satisfies Database["public"]["Tables"]["room_members"]["Insert"],
     ];
 
@@ -141,8 +136,8 @@ export function CreateRoomForm() {
 
     const { error: roomUpdateError } = await supabase
       .from("rooms")
-      .update({ current_room_key_id: currentRoomKey.id } as never)
-      .eq("id", room.id);
+      .update({ current_room_key_id: roomKeyId } as never)
+      .eq("id", roomId);
 
     if (roomUpdateError) {
       toast.error(roomUpdateError.message);
@@ -151,8 +146,8 @@ export function CreateRoomForm() {
 
     const memberKeyPayload = [
       {
-        room_key_id: currentRoomKey.id,
-        room_id: room.id,
+        room_key_id: roomKeyId,
+        room_id: roomId,
         user_id: user.id,
         encrypted_room_key: encryptedRoomKey,
       } satisfies Database["public"]["Tables"]["room_member_keys"]["Insert"],
@@ -166,7 +161,7 @@ export function CreateRoomForm() {
 
     const channelPayload = [
       {
-        room_id: room.id,
+        room_id: roomId,
         name: "geral",
         slug: "geral",
         description: "Canal principal para conversas do time.",
@@ -175,7 +170,7 @@ export function CreateRoomForm() {
         created_by: user.id,
       } satisfies Database["public"]["Tables"]["room_channels"]["Insert"],
       {
-        room_id: room.id,
+        room_id: roomId,
         name: "anuncios",
         slug: "anuncios",
         description: "Avisos e comunicados oficiais da sala.",
@@ -198,7 +193,7 @@ export function CreateRoomForm() {
           ? "Sala privada criada com envelope E2EE para a conta atual."
           : "Sala publica criada e pronta para descoberta no diretorio.",
     });
-    router.push(`/rooms/${room.slug}`);
+    router.push(`/rooms/${roomSlug}`);
     router.refresh();
   });
 
