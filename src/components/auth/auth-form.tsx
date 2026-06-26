@@ -15,7 +15,7 @@ import { env, isSupabaseConfigured } from "@/lib/env";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 const schema = z.object({
-  name: z.string().min(2, "Informe seu nome.").optional(),
+  name: z.string(),
   email: z.string().email("Digite um e-mail valido."),
   password: z.string().min(8, "A senha deve ter no minimo 8 caracteres."),
 });
@@ -34,6 +34,7 @@ export function AuthForm() {
     control,
     register,
     handleSubmit,
+    setError,
     trigger,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
@@ -49,6 +50,14 @@ export function AuthForm() {
   const onSubmit = handleSubmit(async (values) => {
     if (!supabase) {
       toast.error("Configure o Supabase antes de autenticar.");
+      return;
+    }
+
+    if (mode === "signup" && values.name.trim().length < 2) {
+      setError("name", {
+        type: "manual",
+        message: "Informe seu nome.",
+      });
       return;
     }
 
